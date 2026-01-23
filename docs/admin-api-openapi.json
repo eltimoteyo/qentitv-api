@@ -1,0 +1,842 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Qenti Admin API",
+    "version": "1.0.0",
+    "description": "API para el panel de administración de Qenti"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080/api/v1",
+      "description": "Servidor local"
+    },
+    {
+      "url": "https://api.qenti.com/api/v1",
+      "description": "Servidor de producción"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "Series": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "horizontal_poster": {
+            "type": "string",
+            "format": "uri"
+          },
+          "vertical_poster": {
+            "type": "string",
+            "format": "uri"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Episode": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "series_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "episode_number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "video_id_bunny": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "integer",
+            "description": "Duración en segundos"
+          },
+          "is_free": {
+            "type": "boolean"
+          },
+          "price_coins": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "firebase_uid": {
+            "type": "string"
+          },
+          "coin_balance": {
+            "type": "integer"
+          },
+          "is_premium": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateSeriesRequest": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "horizontal_poster": {
+            "type": "string",
+            "format": "uri"
+          },
+          "vertical_poster": {
+            "type": "string",
+            "format": "uri"
+          },
+          "is_active": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "UpdateSeriesRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "horizontal_poster": {
+            "type": "string",
+            "format": "uri"
+          },
+          "vertical_poster": {
+            "type": "string",
+            "format": "uri"
+          },
+          "is_active": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateEpisodeRequest": {
+        "type": "object",
+        "required": ["series_id", "episode_number", "title"],
+        "properties": {
+          "series_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "episode_number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "integer"
+          },
+          "is_free": {
+            "type": "boolean",
+            "default": false
+          },
+          "price_coins": {
+            "type": "integer",
+            "default": 0
+          }
+        }
+      },
+      "UpdateEpisodeRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "integer"
+          },
+          "is_free": {
+            "type": "boolean"
+          },
+          "price_coins": {
+            "type": "integer"
+          }
+        }
+      },
+      "CompleteUploadRequest": {
+        "type": "object",
+        "required": ["video_id_bunny"],
+        "properties": {
+          "video_id_bunny": {
+            "type": "string"
+          }
+        }
+      },
+      "BanUserRequest": {
+        "type": "object",
+        "required": ["reason"],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "GiftCoinsRequest": {
+        "type": "object",
+        "required": ["amount"],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "DashboardResponse": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "total_series": {
+                "type": "integer"
+              },
+              "total_episodes": {
+                "type": "integer"
+              },
+              "total_users": {
+                "type": "integer"
+              },
+              "active_users_7d": {
+                "type": "integer"
+              },
+              "active_users_30d": {
+                "type": "integer"
+              },
+              "premium_users": {
+                "type": "integer"
+              },
+              "total_revenue_30d": {
+                "type": "number"
+              }
+            }
+          },
+          "charts": {
+            "type": "object",
+            "properties": {
+              "retention_by_episode": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "episode_number": {
+                      "type": "integer"
+                    },
+                    "completion_rate": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              "top_dramas": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "episode_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "episode_title": {
+                      "type": "string"
+                    },
+                    "series_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "series_title": {
+                      "type": "string"
+                    },
+                    "view_count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "revenue": {
+                "type": "array"
+              }
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/admin/dashboard": {
+      "get": {
+        "tags": ["Dashboard"],
+        "summary": "Obtener métricas del dashboard",
+        "responses": {
+          "200": {
+            "description": "Métricas del dashboard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/series": {
+      "get": {
+        "tags": ["Series"],
+        "summary": "Listar todas las series",
+        "responses": {
+          "200": {
+            "description": "Lista de series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "series": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Series"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Series"],
+        "summary": "Crear una nueva serie",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSeriesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Serie creada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "series": {
+                      "$ref": "#/components/schemas/Series"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request inválido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/series/{id}": {
+      "get": {
+        "tags": ["Series"],
+        "summary": "Obtener una serie por ID",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Serie encontrada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "series": {
+                      "$ref": "#/components/schemas/Series"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Serie no encontrada"
+          }
+        }
+      },
+      "put": {
+        "tags": ["Series"],
+        "summary": "Actualizar una serie",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSeriesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Serie actualizada"
+          },
+          "404": {
+            "description": "Serie no encontrada"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Series"],
+        "summary": "Eliminar una serie",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Serie eliminada"
+          }
+        }
+      }
+    },
+    "/admin/episodes": {
+      "get": {
+        "tags": ["Episodes"],
+        "summary": "Listar episodios",
+        "parameters": [
+          {
+            "name": "series_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de episodios",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "episodes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Episode"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Episodes"],
+        "summary": "Crear un nuevo episodio",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEpisodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Episodio creado"
+          }
+        }
+      }
+    },
+    "/admin/episodes/{id}": {
+      "get": {
+        "tags": ["Episodes"],
+        "summary": "Obtener un episodio por ID",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Episodio encontrado"
+          }
+        }
+      },
+      "put": {
+        "tags": ["Episodes"],
+        "summary": "Actualizar un episodio",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEpisodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Episodio actualizado"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Episodes"],
+        "summary": "Eliminar un episodio",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Episodio eliminado"
+          }
+        }
+      }
+    },
+    "/admin/episodes/{id}/upload-url": {
+      "post": {
+        "tags": ["Episodes"],
+        "summary": "Obtener URL presignada para subir video",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "URL de upload generada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "upload_url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "episode_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/episodes/{id}/complete": {
+      "post": {
+        "tags": ["Episodes"],
+        "summary": "Completar upload de video",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteUploadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upload completado"
+          }
+        }
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "Listar usuarios",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de usuarios"
+          }
+        }
+      }
+    },
+    "/admin/users/{id}": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "Obtener detalle de usuario",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Detalle del usuario"
+          }
+        }
+      }
+    },
+    "/admin/users/{id}/ban": {
+      "put": {
+        "tags": ["Users"],
+        "summary": "Banear un usuario",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BanUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Usuario baneado"
+          }
+        }
+      }
+    },
+    "/admin/users/{id}/coins": {
+      "put": {
+        "tags": ["Users"],
+        "summary": "Regalar monedas a un usuario",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GiftCoinsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Monedas regaladas"
+          }
+        }
+      }
+    }
+  }
+}
+

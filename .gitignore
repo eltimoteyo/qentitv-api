@@ -1,0 +1,45 @@
+# Binarios
+*.exe
+main.exe
+qenti-api
+
+# Variables de entorno
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Credenciales
+firebase-credentials.json
+*.pem
+*.key
+*.p12
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Temporal
+tmp/
+temp/
+*.tmp
+
+# Go
+*.test
+*.out
+vendor/

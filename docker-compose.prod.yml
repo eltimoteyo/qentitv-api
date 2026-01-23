@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: qenti-postgres-prod
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-qenti}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - qenti-network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qenti-api-prod
+    environment:
+      # App
+      APP_ENV: production
+      PORT: 8080
+      
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-qenti}
+      DB_SSLMODE: disable
+      
+      # JWT
+      JWT_SECRET: ${JWT_SECRET}
+      
+      # Bunny.net
+      BUNNY_STREAM_LIBRARY_ID: ${BUNNY_STREAM_LIBRARY_ID}
+      BUNNY_STREAM_API_KEY: ${BUNNY_STREAM_API_KEY}
+      BUNNY_CDN_HOSTNAME: ${BUNNY_CDN_HOSTNAME}
+      BUNNY_SECURITY_KEY: ${BUNNY_SECURITY_KEY}
+      
+      # Firebase
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      FIREBASE_CREDENTIALS_PATH: /app/firebase-credentials.json
+      
+      # RevenueCat
+      REVENUECAT_API_KEY: ${REVENUECAT_API_KEY}
+      REVENUECAT_WEBHOOK_SECRET: ${REVENUECAT_WEBHOOK_SECRET}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - ./firebase-credentials.json:/app/firebase-credentials.json:ro
+    # Nota: Si no usas Firebase, comenta la línea anterior o crea un archivo vacío
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - qenti-network
+
+volumes:
+  postgres_data:
+
+networks:
+  qenti-network:
+    driver: bridge
+

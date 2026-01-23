@@ -1,0 +1,49 @@
+# Binarios
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+qenti-api
+
+# Archivos de test
+*_test.go
+*.test
+
+# Archivos de desarrollo
+.env
+.env.local
+.env.*.local
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentación
+*.md
+docs/
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+build/
+
