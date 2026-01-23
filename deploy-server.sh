@@ -60,8 +60,11 @@ sleep 15
 echo ""
 echo "🔍 Verificando health check..."
 
-API_PORT=$(grep API_PORT .env.production | cut -d '=' -f2 | tr -d ' ')
+# Obtener puerto configurado
+API_PORT=$(grep "^API_PORT" .env.production | cut -d '=' -f2 | tr -d ' ' | tr -d '"' | tr -d "'")
 API_PORT=${API_PORT:-8080}
+
+echo "   Usando puerto: $API_PORT"
 
 MAX_ATTEMPTS=10
 ATTEMPT=0

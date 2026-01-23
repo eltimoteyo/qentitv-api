@@ -117,13 +117,27 @@ git clone https://github.com/TU_USUARIO/qentitv-api.git .
 git clone https://TU_TOKEN@github.com/TU_USUARIO/qentitv-api.git .
 ```
 
-### 3.2 Crear Archivo de Configuración
+### 3.2 Verificar Puerto Disponible
 
 ```bash
 cd /opt/qentitv/qentitv-api
 # O si clonaste directamente en /opt/qentitv:
 cd /opt/qentitv
 
+# Verificar qué puertos están disponibles
+chmod +x verificar-puerto.sh
+./verificar-puerto.sh
+
+# O verificar manualmente
+netstat -tuln | grep :8080
+# Si muestra algo, el puerto está en uso
+```
+
+**Si el puerto 8080 está en uso**, el script te sugerirá otro puerto (ej: 8081, 8082, etc.)
+
+### 3.3 Crear Archivo de Configuración
+
+```bash
 # Crear .env.production
 nano .env.production
 ```
@@ -154,8 +168,9 @@ FIREBASE_CREDENTIALS_PATH=
 REVENUECAT_API_KEY=
 REVENUECAT_WEBHOOK_SECRET=
 
-# Puerto del API
+# Puerto del API (verifica que esté disponible con ./verificar-puerto.sh)
 API_PORT=8080
+# Si 8080 está ocupado, usa otro puerto (ej: 8081, 8082, 3000, etc.)
 ```
 
 **Generar JWT_SECRET:**
@@ -247,15 +262,21 @@ docker-compose -f docker-compose.prod.yml logs -f postgres
 
 ## 🔒 Paso 6: Configurar Firewall
 
-### 6.1 Abrir Puerto 8080
+### 6.1 Abrir Puerto en Firewall
 
 ```bash
+# Obtener el puerto configurado
+API_PORT=$(grep "^API_PORT" .env.production | cut -d '=' -f2 | tr -d ' ' | tr -d '"' | tr -d "'")
+API_PORT=${API_PORT:-8080}
+
+echo "Abriendo puerto: $API_PORT"
+
 # UFW (Ubuntu/Debian)
-sudo ufw allow 8080/tcp
+sudo ufw allow $API_PORT/tcp
 sudo ufw reload
 
 # O iptables
-sudo iptables -A INPUT -p tcp --dport 8080 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport $API_PORT -j ACCEPT
 sudo iptables-save
 ```
 
@@ -263,7 +284,8 @@ sudo iptables-save
 
 1. Accede al panel de Hostinger
 2. Ve a **Firewall** o **Security**
-3. Agrega regla para puerto **8080** (TCP)
+3. Agrega regla para el puerto configurado (ej: **8081**, **8082**, etc.) (TCP)
+4. **IMPORTANTE:** Usa el mismo puerto que configuraste en `API_PORT` del `.env.production`
 
 ---
 
@@ -287,6 +309,7 @@ server {
     server_name api.tudominio.com;
 
     location / {
+        # Reemplaza 8080 con el puerto que configuraste
         proxy_pass http://localhost:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -330,7 +353,11 @@ Edita `qentitv_mobile/lib/core/config/app_config.dart`:
 ```dart
 class AppConfig {
   // Para API desplegada en VPS Hostinger
+  // ⚠️ IMPORTANTE: Reemplaza 8080 con el puerto que configuraste
   static const String baseUrl = 'http://TU_IP_VPS:8080/api/v1';
+  
+  // Ejemplo si usaste puerto 8081:
+  // static const String baseUrl = 'http://TU_IP_VPS:8081/api/v1';
   
   // O si configuraste dominio:
   // static const String baseUrl = 'https://api.tudominio.com/api/v1';
@@ -393,16 +420,23 @@ docker-compose -f docker-compose.prod.yml logs postgres
 docker-compose -f docker-compose.prod.yml restart postgres
 ```
 
-### Error: "Port 8080 already in use"
+### Error: "Port already in use"
+
+**Solución:** Usa un puerto diferente
 
 ```bash
-# Ver qué proceso usa el puerto
-sudo lsof -i :8080
-# O
-sudo netstat -tulpn | grep 8080
+# Ver qué puertos están en uso
+sudo netstat -tulpn | grep LISTEN
 
-# Matar proceso (reemplaza PID)
-sudo kill -9 PID
+# O usar el script para encontrar puerto disponible
+./verificar-puerto.sh
+
+# Actualizar .env.production con el puerto disponible
+nano .env.production
+# Cambiar API_PORT=8080 a API_PORT=8081 (o el que esté disponible)
+
+# Redesplegar
+./deploy-server.sh
 ```
 
 ### Error: "Permission denied" en Docker
