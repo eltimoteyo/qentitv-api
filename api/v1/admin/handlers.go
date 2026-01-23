@@ -362,6 +362,99 @@ func (h *Handlers) GetUploadURL(c *gin.Context) {
 	})
 }
 
+// UploadVideo recibe el archivo de video y lo sube a Bunny.net
+// Endpoint: POST /admin/episodes/{id}/upload
+func (h *Handlers) UploadVideo(c *gin.Context) {
+	ctx := c.Request.Context()
+	episodeIDStr := c.Param("id")
+	
+	episodeID, err := uuid.Parse(episodeIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid episode ID",
+		})
+		return
+	}
+	
+	// Obtener episodio
+	episode, err := h.episodesRepo.GetByID(ctx, episodeID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Episode not found",
+		})
+		return
+	}
+	
+	// Obtener archivo del multipart form
+	file, err := c.FormFile("video")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "No video file provided",
+			"details": err.Error(),
+		})
+		return
+	}
+	
+	// Abrir archivo
+	src, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to open file",
+			"details": err.Error(),
+		})
+		return
+	}
+	defer src.Close()
+	
+	// Si el episodio ya tiene un video_id, usarlo; si no, crear uno nuevo
+	var videoID string
+	if episode.VideoIDBunny != "" {
+		videoID = episode.VideoIDBunny
+	} else {
+		// Crear nuevo video en Bunny.net
+		uploadResult, err := h.bunnyService.PresignedUploadURL(episode.Title)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to create video in Bunny.net",
+				"details": err.Error(),
+			})
+			return
+		}
+		videoID = uploadResult.VideoID
+	}
+	
+	// Subir archivo a Bunny.net
+	contentType := file.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "video/mp4" // Default
+	}
+	
+	if err := h.bunnyService.UploadVideo(videoID, src, contentType, file.Size); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to upload video to Bunny.net",
+			"details": err.Error(),
+		})
+		return
+	}
+	
+	// Actualizar video_id_bunny en el episodio
+	if err := h.episodesRepo.UpdateVideoID(ctx, episodeID, videoID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to update episode video ID",
+			"details": err.Error(),
+		})
+		return
+	}
+	
+	// Marcar video como completado en Bunny (opcional, para re-encoding)
+	h.bunnyService.CompleteUpload(videoID) // Ignorar error, no es crítico
+	
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Video uploaded successfully",
+		"video_id": videoID,
+	})
+}
+
 // CompleteUpload marca un episodio como completado después de la subida
 // Endpoint: POST /admin/episodes/{id}/complete
 type CompleteUploadRequest struct {

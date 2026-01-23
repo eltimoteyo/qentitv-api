@@ -125,8 +125,11 @@ cd /opt/qentitv/qentitv-api
 cd /opt/qentitv
 
 # Verificar qué puertos están disponibles
-chmod +x verificar-puerto.sh
+chmod +x verificar-puerto.sh  # ⚠️ IMPORTANTE: Dar permisos de ejecución
 ./verificar-puerto.sh
+
+# O si aún da error:
+bash verificar-puerto.sh
 
 # O verificar manualmente
 netstat -tuln | grep :8080
@@ -200,11 +203,14 @@ nano firebase-credentials.json
 ```bash
 cd /opt/qentitv/qentitv-api
 
-# Dar permisos de ejecución
-chmod +x deploy-server.sh
+# Dar permisos de ejecución a todos los scripts
+chmod +x *.sh
 
 # Ejecutar despliegue
 ./deploy-server.sh
+
+# O si da error de permisos:
+bash deploy-server.sh
 ```
 
 ### 4.2 O Manualmente
@@ -374,12 +380,29 @@ class AppConfig {
 # En el servidor
 cd /opt/qentitv/qentitv-api
 
+# Configurar estrategia de merge (si no lo has hecho)
+git config pull.rebase false
+
 # Obtener últimos cambios
 git pull origin main
 
-# Reconstruir y redesplegar
+# Si hay conflictos, resolverlos primero
+# Luego reconstruir y redesplegar
 docker-compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 ```
+
+### ⚠️ Si Sale Error de "Divergent Branches"
+
+```bash
+# Opción 1: Merge (recomendado)
+git pull --no-rebase origin main
+
+# Opción 2: Descartar cambios locales (si no son importantes)
+git reset --hard origin/main
+git pull origin main
+```
+
+**Ver:** `SOLUCION_GIT_PULL.md` para más detalles
 
 ### Script de Actualización Automática
 
@@ -420,24 +443,47 @@ docker-compose -f docker-compose.prod.yml logs postgres
 docker-compose -f docker-compose.prod.yml restart postgres
 ```
 
-### Error: "Port already in use"
+### Error: "Port already in use" o "bind: address already in use"
 
 **Solución:** Usa un puerto diferente
+
+```bash
+# Opción 1: Script automático (Recomendado)
+./verificar-puerto.sh
+# Te dirá qué puerto está disponible (ej: 8082)
+
+# Actualizar .env.production
+nano .env.production
+# Cambiar API_PORT=8080 a API_PORT=8082
+
+# Redesplegar
+./deploy-server.sh
+```
+
+**O manualmente:**
 
 ```bash
 # Ver qué puertos están en uso
 sudo netstat -tulpn | grep LISTEN
 
-# O usar el script para encontrar puerto disponible
-./verificar-puerto.sh
+# Ver qué usa el puerto 8080
+sudo netstat -tulpn | grep :8080
 
-# Actualizar .env.production con el puerto disponible
+# Actualizar .env.production con puerto disponible
 nano .env.production
 # Cambiar API_PORT=8080 a API_PORT=8081 (o el que esté disponible)
 
+# Actualizar firewall
+sudo ufw allow 8081/tcp
+sudo ufw reload
+
 # Redesplegar
 ./deploy-server.sh
+
+# IMPORTANTE: Actualizar app Flutter con el nuevo puerto
 ```
+
+**Ver:** `SOLUCION_PUERTO_OCUPADO.md` para guía completa
 
 ### Error: "Permission denied" en Docker
 

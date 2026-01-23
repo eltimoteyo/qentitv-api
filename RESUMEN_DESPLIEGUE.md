@@ -29,8 +29,14 @@ cd qentitv-api
 ### 3. Verificar Puerto Disponible
 
 ```bash
+# Dar permisos de ejecución (IMPORTANTE)
 chmod +x verificar-puerto.sh
+
+# Ejecutar
 ./verificar-puerto.sh
+
+# O si da error de permisos:
+bash verificar-puerto.sh
 ```
 
 **Ejemplo de salida:**

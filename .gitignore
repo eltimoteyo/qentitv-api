@@ -37,9 +37,7 @@ docker-compose.override.yml
 # Temporal
 tmp/
 temp/
-*.tmp
-
-# Go
+*.tmp# Go
 *.test
 *.out
 vendor/

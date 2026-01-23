@@ -24,7 +24,7 @@ func NewService(cfg config.BunnyConfig) *Service {
 	return &Service{
 		config: cfg,
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 30 * time.Minute, // Timeout largo para uploads grandes
 		},
 	}
 }
@@ -149,6 +149,36 @@ func (s *Service) CompleteUpload(videoID string) error {
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		// No es crítico, el video ya está subido
 		return nil
+	}
+	
+	return nil
+}
+
+// UploadVideo sube un archivo de video directamente a Bunny.net
+// Recibe un io.Reader con el contenido del video y el videoID de Bunny
+func (s *Service) UploadVideo(videoID string, videoData io.Reader, contentType string, contentLength int64) error {
+	url := fmt.Sprintf("https://video.bunnycdn.com/library/%s/videos/%s", s.config.StreamLibraryID, videoID)
+	
+	req, err := http.NewRequest("PUT", url, videoData)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	req.Header.Set("AccessKey", s.config.StreamAPIKey)
+	req.Header.Set("Content-Type", contentType)
+	if contentLength > 0 {
+		req.ContentLength = contentLength
+	}
+	
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to upload video: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("bunny API error: %d - %s", resp.StatusCode, string(body))
 	}
 	
 	return nil

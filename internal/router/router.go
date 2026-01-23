@@ -149,6 +149,7 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 		
 		// Video upload flow (específico por episodio)
 		v1Admin.POST("/episodes/:id/upload-url", adminHandlers.GetUploadURL)
+		v1Admin.POST("/episodes/:id/upload", adminHandlers.UploadVideo)
 		v1Admin.POST("/episodes/:id/complete", adminHandlers.CompleteUpload)
 		
 		// Validación de servicios
