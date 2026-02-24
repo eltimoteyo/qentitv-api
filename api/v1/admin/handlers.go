@@ -469,11 +469,32 @@ func (h *Handlers) UploadVideo(c *gin.Context) {
 	}
 
 	if err := h.videoProvider.UploadVideo(externalID, src, contentType, file.Size); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   fmt.Sprintf("Failed to upload video to %s", h.videoProvider.ProviderName()),
-			"details": err.Error(),
-		})
-		return
+		// Si falla al subir (posiblemente el ID ya no existe en el proveedor),
+		// intentar crear un video nuevo y subir de nuevo
+		uploadResult, err2 := h.videoProvider.CreateVideo(episode.Title)
+		if err2 != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   fmt.Sprintf("Failed to upload video to %s", h.videoProvider.ProviderName()),
+				"details": err.Error(),
+			})
+			return
+		}
+		externalID = uploadResult.ExternalID
+		// Reabrir el archivo para el segundo intento
+		src.Close()
+		src2, err2 := file.Open()
+		if err2 != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reopen file", "details": err2.Error()})
+			return
+		}
+		defer src2.Close()
+		if err := h.videoProvider.UploadVideo(externalID, src2, contentType, file.Size); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   fmt.Sprintf("Failed to upload video to %s", h.videoProvider.ProviderName()),
+				"details": err.Error(),
+			})
+			return
+		}
 	}
 
 	if err := h.episodesRepo.UpdateVideoID(ctx, episodeID, externalID); err != nil {
