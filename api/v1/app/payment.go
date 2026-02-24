@@ -1,6 +1,7 @@
 package app
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -34,16 +35,33 @@ func (h *Handlers) GetSubscriptionStatus(c *gin.Context) {
 	if user.IsPremium {
 		status = "active"
 	}
-	
-	// Si está configurado RevenueCat, verificar también allí
-	// Por ahora usamos solo el estado de DB
-	// TODO: Integrar con RevenueCat API para obtener fecha de expiración real
-	
+
+	// Si RevenueCat está configurado, sincronizar estado real y obtener expiración
+	var expiresAt interface{} = nil
+	var autoRenew bool = false
+	if h.paymentService != nil && h.cfg.RevenueCat.APIKey != "" && user.FirebaseUID != "" {
+		premiumRC, expiry, renew, err := h.paymentService.GetSubscriptionDetails(user.FirebaseUID)
+		if err != nil {
+			log.Printf("RevenueCat check failed for user %s: %v", uid, err)
+		} else {
+			// RevenueCat es fuente de verdad cuando está configurado
+			if premiumRC {
+				status = "active"
+			} else {
+				status = "inactive"
+			}
+			if !expiry.IsZero() {
+				expiresAt = expiry.Format("2006-01-02T15:04:05Z")
+			}
+			autoRenew = renew
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"status":      status,
-		"is_premium":  user.IsPremium,
-		"expires_at":  nil, // TODO: Obtener desde RevenueCat cuando esté configurado
-		"auto_renew":  false, // TODO: Obtener desde RevenueCat
+		"status":     status,
+		"is_premium": user.IsPremium,
+		"expires_at": expiresAt,
+		"auto_renew": autoRenew,
 	})
 }
 

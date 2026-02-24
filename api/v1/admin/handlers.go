@@ -1,31 +1,55 @@
 package admin
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/qenti/qenti/internal/pkg/bunny"
 	"github.com/qenti/qenti/internal/pkg/episodes"
 	"github.com/qenti/qenti/internal/pkg/models"
+	"github.com/qenti/qenti/internal/pkg/notifications"
 	"github.com/qenti/qenti/internal/pkg/series"
+	"github.com/qenti/qenti/internal/pkg/storage"
 )
 
 type Handlers struct {
-	seriesRepo   *series.Repository
-	episodesRepo *episodes.Repository
-	bunnyService *bunny.Service
+	seriesRepo     *series.Repository
+	episodesRepo   *episodes.Repository
+	videoProvider  storage.VideoProvider
+	notifService   *notifications.Service
+	// maxFileSizeMB límite de tamaño en MB para uploads (configurable vía VideoUploadConfig)
+	maxFileSizeMB  int64
+	warnFileSizeMB int64
+	// Cliff pricing: precio automático según posición del episodio
+	cliffStart     int // primer ep en precio alto (ej. 8)
+	basePrice      int // precio ep 1..(cliffStart-1) (ej. 10 monedas)
+	cliffPrice     int // precio ep >= cliffStart (ej. 20 monedas)
 }
 
 func NewHandlers(
 	seriesRepo *series.Repository,
 	episodesRepo *episodes.Repository,
-	bunnyService *bunny.Service,
+	videoProvider storage.VideoProvider,
+	notifService *notifications.Service,
+	maxFileSizeMB int64,
+	warnFileSizeMB int64,
+	cliffStart int,
+	basePrice int,
+	cliffPrice int,
 ) *Handlers {
 	return &Handlers{
-		seriesRepo:   seriesRepo,
-		episodesRepo: episodesRepo,
-		bunnyService: bunnyService,
+		seriesRepo:     seriesRepo,
+		episodesRepo:   episodesRepo,
+		videoProvider:  videoProvider,
+		notifService:   notifService,
+		maxFileSizeMB:  maxFileSizeMB,
+		warnFileSizeMB: warnFileSizeMB,
+		cliffStart:     cliffStart,
+		basePrice:      basePrice,
+		cliffPrice:     cliffPrice,
 	}
 }
 
@@ -65,26 +89,34 @@ type UpdateEpisodeRequest struct {
 	PriceCoins int    `json:"price_coins"`
 }
 
-// GetSeries lista todas las series (admin)
+// producerIDFromContext extrae el producer_id del contexto gin (vacío para super_admin).
+func producerIDFromContext(c *gin.Context) *uuid.UUID {
+	pidStr, _ := c.Get("producer_id")
+	s, ok := pidStr.(string)
+	if !ok || s == "" {
+		return nil
+	}
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return nil
+	}
+	return &id
+}
+
+// GetSeries lista las series del panel: filtra por producer si aplica
 func (h *Handlers) GetSeries(c *gin.Context) {
 	ctx := c.Request.Context()
-	
-	seriesList, err := h.seriesRepo.GetAll(ctx)
+	producerID := producerIDFromContext(c)
+
+	seriesList, err := h.seriesRepo.GetAllAdmin(ctx, producerID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to fetch series",
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch series"})
 		return
 	}
-	
-	// Asegurar que siempre devolvemos un array (no nil)
 	if seriesList == nil {
 		seriesList = []models.Series{}
 	}
-	
-	c.JSON(http.StatusOK, gin.H{
-		"series": seriesList,
-	})
+	c.JSON(http.StatusOK, gin.H{"series": seriesList})
 }
 
 // GetSeriesByID obtiene una serie por ID
@@ -113,61 +145,56 @@ func (h *Handlers) GetSeriesByID(c *gin.Context) {
 	})
 }
 
-// CreateSeries crea una nueva serie
+// CreateSeries crea una nueva serie y la asigna al productor si aplica
 func (h *Handlers) CreateSeries(c *gin.Context) {
 	ctx := c.Request.Context()
-	
+
 	var req CreateSeriesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid request body",
-			"details": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": err.Error()})
 		return
 	}
-	
+
 	series := &models.Series{
 		Title:            req.Title,
 		Description:      req.Description,
 		HorizontalPoster: req.HorizontalPoster,
 		VerticalPoster:   req.VerticalPoster,
 		IsActive:         req.IsActive,
+		ProducerID:       producerIDFromContext(c), // nil para super_admin
 	}
-	
+
 	if err := h.seriesRepo.Create(ctx, series); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to create series",
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create series"})
 		return
 	}
-	
-	c.JSON(http.StatusCreated, gin.H{
-		"series": series,
-	})
+	c.JSON(http.StatusCreated, gin.H{"series": series})
 }
 
-// UpdateSeries actualiza una serie existente
+// UpdateSeries actualiza una serie existente verificando propiedad si es producer
 func (h *Handlers) UpdateSeries(c *gin.Context) {
 	ctx := c.Request.Context()
 	seriesIDStr := c.Param("id")
-	
+
 	seriesID, err := uuid.Parse(seriesIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid series ID",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid series ID"})
 		return
 	}
-	
+
+	// Verificar propiedad
+	pidStr, _ := c.Get("producer_id")
+	if owns, err := h.seriesRepo.BelongsToProducer(ctx, seriesID, fmt.Sprintf("%v", pidStr)); err != nil || !owns {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Series not found or not owned by you"})
+		return
+	}
+
 	var req UpdateSeriesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid request body",
-			"details": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": err.Error()})
 		return
 	}
-	
+
 	// Obtener serie existente
 	series, err := h.seriesRepo.GetByID(ctx, seriesID)
 	if err != nil {
@@ -206,29 +233,29 @@ func (h *Handlers) UpdateSeries(c *gin.Context) {
 	})
 }
 
-// DeleteSeries elimina una serie (soft delete)
+// DeleteSeries elimina una serie (soft delete) verificando propiedad
 func (h *Handlers) DeleteSeries(c *gin.Context) {
 	ctx := c.Request.Context()
 	seriesIDStr := c.Param("id")
-	
+
 	seriesID, err := uuid.Parse(seriesIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid series ID",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid series ID"})
 		return
 	}
-	
+
+	// Verificar propiedad
+	pidStr, _ := c.Get("producer_id")
+	if owns, err := h.seriesRepo.BelongsToProducer(ctx, seriesID, fmt.Sprintf("%v", pidStr)); err != nil || !owns {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Series not found or not owned by you"})
+		return
+	}
+
 	if err := h.seriesRepo.Delete(ctx, seriesID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to delete series",
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete series"})
 		return
 	}
-	
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Series deleted successfully",
-	})
+	c.JSON(http.StatusOK, gin.H{"message": "Series deleted successfully"})
 }
 
 // CreateEpisode crea un nuevo episodio
@@ -252,6 +279,16 @@ func (h *Handlers) CreateEpisode(c *gin.Context) {
 		IsFree:        req.IsFree,
 		PriceCoins:    req.PriceCoins,
 	}
+
+	// Cliff pricing: si el admin no especificó precio y el episodio no es gratuito,
+	// asignamos el precio automáticamente según la posición del episodio.
+	if !req.IsFree && req.PriceCoins == 0 {
+		if h.cliffStart > 0 && req.EpisodeNumber >= h.cliffStart {
+			episode.PriceCoins = h.cliffPrice
+		} else {
+			episode.PriceCoins = h.basePrice
+		}
+	}
 	
 	if err := h.episodesRepo.Create(ctx, episode); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -259,7 +296,7 @@ func (h *Handlers) CreateEpisode(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusCreated, gin.H{
 		"episode": episode,
 	})
@@ -322,137 +359,150 @@ func (h *Handlers) UpdateEpisode(c *gin.Context) {
 	})
 }
 
-// GetUploadURL genera una URL presignada para subir un video a Bunny.net
+// GetUploadURL genera una URL de upload directo al proveedor de video activo.
+// El cliente hace PUT directo a esa URL (no pasa por el servidor).
 // Endpoint: POST /admin/episodes/{id}/upload-url
 func (h *Handlers) GetUploadURL(c *gin.Context) {
 	episodeIDStr := c.Param("id")
-	
+
 	episodeID, err := uuid.Parse(episodeIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid episode ID",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
 		return
 	}
-	
-	// Obtener episodio para usar su título
+
 	ctx := c.Request.Context()
 	episode, err := h.episodesRepo.GetByID(ctx, episodeID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "Episode not found",
-		})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Episode not found"})
 		return
 	}
-	
-	// Generar URL presignada y video ID
-	uploadResult, err := h.bunnyService.PresignedUploadURL(episode.Title)
+
+	uploadResult, err := h.videoProvider.CreateVideo(episode.Title)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to generate upload URL",
+			"error":   "Failed to generate upload URL",
 			"details": err.Error(),
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"upload_url": uploadResult.UploadURL,
-		"video_id":   uploadResult.VideoID,
+		"video_id":   uploadResult.ExternalID,
 		"episode_id": episodeID,
+		"provider":   h.videoProvider.ProviderName(),
 	})
 }
 
-// UploadVideo recibe el archivo de video y lo sube a Bunny.net
+// UploadVideo recibe el archivo de video, lo valida y lo sube al proveedor activo.
 // Endpoint: POST /admin/episodes/{id}/upload
 func (h *Handlers) UploadVideo(c *gin.Context) {
 	ctx := c.Request.Context()
 	episodeIDStr := c.Param("id")
-	
+
 	episodeID, err := uuid.Parse(episodeIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid episode ID",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
 		return
 	}
-	
-	// Obtener episodio
+
 	episode, err := h.episodesRepo.GetByID(ctx, episodeID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "Episode not found",
-		})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Episode not found"})
 		return
 	}
-	
-	// Obtener archivo del multipart form
+
 	file, err := c.FormFile("video")
 	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No video file provided", "details": err.Error()})
+		return
+	}
+
+	// --- Validación de tipo MIME ---
+	contentType := file.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "video/mp4"
+	}
+	if !strings.HasPrefix(contentType, "video/") {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "No video file provided",
-			"details": err.Error(),
+			"error": fmt.Sprintf("Tipo de archivo no permitido: %s. Solo se aceptan videos.", contentType),
 		})
 		return
 	}
-	
-	// Abrir archivo
+
+	// --- Validación de tamaño ---
+	maxBytes := h.maxFileSizeMB * 1024 * 1024
+	if file.Size > maxBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error": fmt.Sprintf(
+				"El archivo pesa %.1f MB y supera el límite de %d MB. Comprimir el video antes de subir.",
+				float64(file.Size)/1024/1024, h.maxFileSizeMB,
+			),
+			"max_mb":  h.maxFileSizeMB,
+			"size_mb": float64(file.Size) / 1024 / 1024,
+		})
+		return
+	}
+
 	src, err := file.Open()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to open file",
-			"details": err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open file", "details": err.Error()})
 		return
 	}
 	defer src.Close()
-	
-	// Si el episodio ya tiene un video_id, usarlo; si no, crear uno nuevo
-	var videoID string
+
+	// Crear o reutilizar el ID externo del video
+	var externalID string
 	if episode.VideoIDBunny != "" {
-		videoID = episode.VideoIDBunny
+		externalID = episode.VideoIDBunny
 	} else {
-		// Crear nuevo video en Bunny.net
-		uploadResult, err := h.bunnyService.PresignedUploadURL(episode.Title)
+		uploadResult, err := h.videoProvider.CreateVideo(episode.Title)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to create video in Bunny.net",
+				"error":   fmt.Sprintf("Failed to create video in %s", h.videoProvider.ProviderName()),
 				"details": err.Error(),
 			})
 			return
 		}
-		videoID = uploadResult.VideoID
+		externalID = uploadResult.ExternalID
 	}
-	
-	// Subir archivo a Bunny.net
-	contentType := file.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "video/mp4" // Default
-	}
-	
-	if err := h.bunnyService.UploadVideo(videoID, src, contentType, file.Size); err != nil {
+
+	if err := h.videoProvider.UploadVideo(externalID, src, contentType, file.Size); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to upload video to Bunny.net",
+			"error":   fmt.Sprintf("Failed to upload video to %s", h.videoProvider.ProviderName()),
 			"details": err.Error(),
 		})
 		return
 	}
-	
-	// Actualizar video_id_bunny en el episodio
-	if err := h.episodesRepo.UpdateVideoID(ctx, episodeID, videoID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to update episode video ID",
-			"details": err.Error(),
-		})
+
+	if err := h.episodesRepo.UpdateVideoID(ctx, episodeID, externalID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update episode video ID", "details": err.Error()})
 		return
 	}
-	
-	// Marcar video como completado en Bunny (opcional, para re-encoding)
-	h.bunnyService.CompleteUpload(videoID) // Ignorar error, no es crítico
-	
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Video uploaded successfully",
-		"video_id": videoID,
-	})
+
+	h.videoProvider.CompleteUpload(externalID) // no crítico
+
+	// Avisar si el video es más grande de lo recomendado
+	warning := ""
+	warnBytes := h.warnFileSizeMB * 1024 * 1024
+	if file.Size > warnBytes {
+		warning = fmt.Sprintf(
+			"El video pesa %.1f MB. Para micro-dramas verticales se recomienda < %d MB. Considerar re-comprimir con H.264/H.265 CRF 28-30.",
+			float64(file.Size)/1024/1024, h.warnFileSizeMB,
+		)
+	}
+
+	resp := gin.H{
+		"message":   "Video uploaded successfully",
+		"video_id":  externalID,
+		"provider":  h.videoProvider.ProviderName(),
+		"size_mb":   float64(file.Size) / 1024 / 1024,
+	}
+	if warning != "" {
+		resp["warning"] = warning
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // CompleteUpload marca un episodio como completado después de la subida
@@ -464,62 +514,67 @@ type CompleteUploadRequest struct {
 func (h *Handlers) CompleteUpload(c *gin.Context) {
 	ctx := c.Request.Context()
 	episodeIDStr := c.Param("id")
-	
+
 	episodeID, err := uuid.Parse(episodeIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid episode ID",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
 		return
 	}
-	
+
 	var req CompleteUploadRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid request body",
-			"details": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": err.Error()})
 		return
 	}
-	
-	// Actualizar video_id_bunny en el episodio
+
 	if err := h.episodesRepo.UpdateVideoID(ctx, episodeID, req.VideoIDBunny); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to update episode video ID",
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update episode video ID"})
 		return
 	}
-	
-	// Marcar video como completado en Bunny (opcional, para re-encoding)
-	if err := h.bunnyService.CompleteUpload(req.VideoIDBunny); err != nil {
-		// Log error pero no fallar la operación
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Episode updated successfully, but re-encoding may have failed",
-			"warning": err.Error(),
-		})
-		return
-	}
-	
+
+	h.videoProvider.CompleteUpload(req.VideoIDBunny) // no crítico
+
+	// Ahora que el video está listo, notificar a los fans de la serie (best-effort)
+	go func() {
+		if h.notifService == nil {
+			return
+		}
+		bgCtx := context.Background()
+		ep, err := h.episodesRepo.GetByID(bgCtx, episodeID)
+		if err != nil || ep == nil {
+			return
+		}
+		s, err := h.seriesRepo.GetByID(bgCtx, ep.SeriesID)
+		seriesTitle := "Nueva actualización"
+		if err == nil && s != nil {
+			seriesTitle = s.Title
+		}
+		h.notifService.NotifyNewEpisode(bgCtx, ep.SeriesID, seriesTitle, ep.EpisodeNumber, ep.Title)
+	}()
+
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Upload completed successfully",
+		"message":  "Upload completed successfully",
+		"provider": h.videoProvider.ProviderName(),
 	})
 }
 
-// ValidateBunnyConnection valida la conexión con Bunny.net
+// ValidateStorageConnection valida la conexión con el proveedor de video activo.
 // Endpoint: GET /admin/validate/bunny
 func (h *Handlers) ValidateBunnyConnection(c *gin.Context) {
-	if err := h.bunnyService.ValidateConnection(); err != nil {
+	if err := h.videoProvider.ValidateConnection(); err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"status":  "error",
-			"error":   err.Error(),
-			"message": "No se pudo conectar con Bunny.net. Verifica tus credenciales.",
+			"status":   "error",
+			"provider": h.videoProvider.ProviderName(),
+			"error":    err.Error(),
+			"message":  "No se pudo conectar con el proveedor de video. Verifica tus credenciales.",
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{
-		"status":  "ok",
-		"message": "Conexión con Bunny.net exitosa",
+		"status":   "ok",
+		"provider": h.videoProvider.ProviderName(),
+		"message":  "Conexión con el proveedor de video exitosa.",
 	})
 }
 

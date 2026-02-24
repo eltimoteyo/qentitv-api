@@ -14,8 +14,14 @@ import (
 func (h *Handlers) GetFeed(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	// Obtener todas las series activas
-	allSeries, err := h.seriesRepo.GetAll(ctx)
+	producerID, err := resolveProducerSlug(ctx, h.db, c.Query("producer_slug"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve producer"})
+		return
+	}
+
+	// Obtener todas las series activas (filtradas por tenant si aplica)
+	allSeries, err := h.seriesRepo.GetAllFiltered(ctx, producerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch series",

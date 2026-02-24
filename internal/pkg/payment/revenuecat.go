@@ -112,3 +112,58 @@ func (s *Service) GetUserSubscriptionStatus(appUserID string) (bool, error) {
 	return false, nil
 }
 
+// GetSubscriptionDetails retorna estado premium, fecha de expiración y auto-renovación
+// desde RevenueCat. Devuelve (isPremium, expiresAt, autoRenew, error).
+func (s *Service) GetSubscriptionDetails(appUserID string) (bool, time.Time, bool, error) {
+	url := fmt.Sprintf("https://api.revenuecat.com/v1/subscribers/%s", appUserID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return false, time.Time{}, false, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+s.config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return false, time.Time{}, false, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return false, time.Time{}, false, fmt.Errorf("revenuecat API error: %d - %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Subscriber struct {
+			Entitlements map[string]struct {
+				ExpiresDate       string `json:"expires_date"`
+				WillRenew         bool   `json:"will_renew"`
+				ProductIdentifier string `json:"product_identifier"`
+			} `json:"entitlements"`
+		} `json:"subscriber"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, time.Time{}, false, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	var latestExpiry time.Time
+	var autoRenew bool
+	for _, entitlement := range result.Subscriber.Entitlements {
+		if entitlement.ExpiresDate != "" {
+			expiry, err := time.Parse(time.RFC3339, entitlement.ExpiresDate)
+			if err == nil && expiry.After(latestExpiry) {
+				latestExpiry = expiry
+				autoRenew = entitlement.WillRenew
+			}
+		}
+	}
+
+	isPremium := !latestExpiry.IsZero() && latestExpiry.After(time.Now())
+	return isPremium, latestExpiry, autoRenew, nil
+}
+
+

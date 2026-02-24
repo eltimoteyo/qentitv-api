@@ -51,6 +51,15 @@ func NewFirebaseService(credentialsPath string) (*FirebaseService, error) {
 	}, nil
 }
 
+// GetApp devuelve el *firebase.App subyacente para reutilizarlo en otros servicios
+// (ej. messaging/FCM). Devuelve nil si el servicio no está inicializado.
+func (f *FirebaseService) GetApp() *firebase.App {
+	if f == nil {
+		return nil
+	}
+	return f.app
+}
+
 // VerifyIDToken verifica un token de Firebase y retorna los claims
 func (f *FirebaseService) VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error) {
 	token, err := f.auth.VerifyIDToken(ctx, idToken)

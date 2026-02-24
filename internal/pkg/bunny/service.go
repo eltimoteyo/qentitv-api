@@ -88,6 +88,16 @@ func (s *Service) PresignedUploadURL(videoTitle string) (*UploadResult, error) {
 
 // GetSignedPlaybackURL genera una URL firmada con token de expiración para reproducir un video
 func (s *Service) GetSignedPlaybackURL(videoID string, expirationMinutes int) (string, error) {
+	// Validar que el videoID no esté vacío
+	if videoID == "" {
+		return "", fmt.Errorf("video ID is empty")
+	}
+	
+	// Validar que el CDN hostname esté configurado
+	if s.config.CDNHostname == "" {
+		return "", fmt.Errorf("BUNNY_CDN_HOSTNAME is not configured")
+	}
+	
 	expirationTime := time.Now().Add(time.Duration(expirationMinutes) * time.Minute).Unix()
 	
 	baseURL := fmt.Sprintf("https://%s/%s.mp4", s.config.CDNHostname, videoID)

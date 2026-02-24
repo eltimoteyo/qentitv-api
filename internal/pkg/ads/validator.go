@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 // Validator valida anuncios para prevenir fraude
@@ -108,15 +109,24 @@ func (v *Validator) ValidateAdReward(ctx context.Context, adID, userID string, c
 	}
 
 	var lastAdTime sql.NullTime
-	cooldownQuery := `SELECT MAX(created_at) FROM ad_validations 
-	                  WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`
+	// Obtenemos el último anuncio visto en las últimas 24h por este usuario.
+	// Luego comparamos en Go si el tiempo transcurrido es menor que cooldownMinutes.
+	cooldownQuery := `SELECT MAX(created_at) FROM ad_validations
+	                  WHERE user_id = $1 AND created_at > NOW() - INTERVAL '24 hours'`
 	err := v.db.QueryRowContext(ctx, cooldownQuery, userID).Scan(&lastAdTime)
 	if err == nil && lastAdTime.Valid {
-		return &AdRewardValidationResult{
-			Valid:           false,
-			Reason:          "Cooldown period active. Please wait before watching another ad.",
-			CooldownSeconds: cooldownMinutes * 60,
-		}, nil
+		elapsed := time.Since(lastAdTime.Time)
+		if int(elapsed.Minutes()) < cooldownMinutes {
+			remainingSecs := cooldownMinutes*60 - int(elapsed.Seconds())
+			if remainingSecs < 0 {
+				remainingSecs = 0
+			}
+			return &AdRewardValidationResult{
+				Valid:           false,
+				Reason:          fmt.Sprintf("Cooldown activo. Espera %d segundos antes de ver otro anuncio.", remainingSecs),
+				CooldownSeconds: remainingSecs,
+			}, nil
+		}
 	}
 
 	var dailyCount int

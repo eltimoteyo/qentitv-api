@@ -2,15 +2,19 @@ package app
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/qenti/qenti/internal/config"
 	"github.com/qenti/qenti/internal/pkg/ads"
-	"github.com/qenti/qenti/internal/pkg/bunny"
 	"github.com/qenti/qenti/internal/pkg/episodes"
 	"github.com/qenti/qenti/internal/pkg/models"
+	"github.com/qenti/qenti/internal/pkg/notifications"
+	"github.com/qenti/qenti/internal/pkg/payment"
 	"github.com/qenti/qenti/internal/pkg/series"
+	"github.com/qenti/qenti/internal/pkg/storage"
 	"github.com/qenti/qenti/internal/pkg/transactions"
 	"github.com/qenti/qenti/internal/pkg/unlocks"
 	"github.com/qenti/qenti/internal/pkg/users"
@@ -18,13 +22,16 @@ import (
 )
 
 type Handlers struct {
-	seriesRepo   *series.Repository
-	episodesRepo *episodes.Repository
-	usersRepo    *users.Repository
-	unlocksRepo  *unlocks.Repository
-	bunnyService *bunny.Service
-	adsValidator *ads.Validator
-	db           *sql.DB // Para acceso a vistas y transacciones
+	seriesRepo     *series.Repository
+	episodesRepo   *episodes.Repository
+	usersRepo      *users.Repository
+	unlocksRepo    *unlocks.Repository
+	videoProvider  storage.VideoProvider
+	adsValidator   *ads.Validator
+	paymentService *payment.Service
+	notifService   *notifications.Service
+	db             *sql.DB // Para acceso a vistas y transacciones
+	cfg            *config.Config
 }
 
 func NewHandlers(
@@ -32,32 +39,45 @@ func NewHandlers(
 	episodesRepo *episodes.Repository,
 	usersRepo *users.Repository,
 	unlocksRepo *unlocks.Repository,
-	bunnyService *bunny.Service,
+	videoProvider storage.VideoProvider,
+	paymentService *payment.Service,
+	notifService *notifications.Service,
 	db *sql.DB,
+	cfg *config.Config,
 ) *Handlers {
 	return &Handlers{
-		seriesRepo:   seriesRepo,
-		episodesRepo: episodesRepo,
-		usersRepo:    usersRepo,
-		unlocksRepo:  unlocksRepo,
-		bunnyService: bunnyService,
-		adsValidator: ads.NewValidator(db),
-		db:           db,
+		seriesRepo:     seriesRepo,
+		episodesRepo:   episodesRepo,
+		usersRepo:      usersRepo,
+		unlocksRepo:    unlocksRepo,
+		videoProvider:  videoProvider,
+		adsValidator:   ads.NewValidator(db),
+		paymentService: paymentService,
+		notifService:   notifService,
+		db:             db,
+		cfg:            cfg,
 	}
 }
 
-// GetSeries lista todas las series disponibles
+// GetSeries lista las series disponibles.
+// Acepta ?producer_slug=slug para filtrar por tenant (multi-tenancy móvil).
 func (h *Handlers) GetSeries(c *gin.Context) {
 	ctx := c.Request.Context()
-	
-	seriesList, err := h.seriesRepo.GetAll(ctx)
+
+	producerID, err := resolveProducerSlug(ctx, h.db, c.Query("producer_slug"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve producer"})
+		return
+	}
+
+	seriesList, err := h.seriesRepo.GetAllFiltered(ctx, producerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch series",
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"series": seriesList,
 	})
@@ -234,15 +254,26 @@ func (h *Handlers) GetEpisodeStream(c *gin.Context) {
 	if episode.VideoIDBunny == "" {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": "Video not available",
+			"message": "Este episodio no tiene video configurado. Por favor verifica en el panel de administración.",
 		})
 		return
 	}
 	
 	// Generar URL firmada (expira en 1 hora)
-	signedURL, err := h.bunnyService.GetSignedPlaybackURL(episode.VideoIDBunny, 60)
+	signedURL, err := h.videoProvider.GetPlaybackURL(episode.VideoIDBunny, 60)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to generate video URL",
+			"message": fmt.Sprintf("Error al generar URL del video: %v", err),
+		})
+		return
+	}
+	
+	// Validar que la URL no esté vacía
+	if signedURL == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Empty video URL",
+			"message": "La URL del video está vacía. Verifica la configuración de Bunny.net CDN.",
 		})
 		return
 	}

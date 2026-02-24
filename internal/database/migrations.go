@@ -20,6 +20,18 @@ func RunMigrations(db *sql.DB) error {
 		createAdValidationsTable,
 		createIndexes,
 		createAdditionalIndexes,
+		createFavoritesTable,
+		createWatchProgressSupport,
+		createDeviceTokensTable,
+		// Multi-tenant
+		createProducersTable,
+		alterSeriesAddProducerID,
+		alterUserRolesAddProducerRoles,
+		// Onboarding + invitations
+		alterProducersAddStatus,
+		createInvitationsTable,
+		// Equipo multi-usuario por tenant
+		createProducerMembersTable,
 	}
 
 	for _, migration := range migrations {
@@ -174,5 +186,117 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_revoked ON refresh_tokens(revoked)
 CREATE INDEX IF NOT EXISTS idx_ad_validations_ad_id ON ad_validations(ad_id);
 CREATE INDEX IF NOT EXISTS idx_ad_validations_user_id ON ad_validations(user_id);
 CREATE INDEX IF NOT EXISTS idx_ad_validations_created_at ON ad_validations(created_at);
+`
+
+const createFavoritesTable = `
+CREATE TABLE IF NOT EXISTS favorites (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    series_id  UUID NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, series_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON favorites(user_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_series_id ON favorites(series_id);
+`
+
+// createDeviceTokensTable crea la tabla de tokens FCM para notificaciones push.
+const createDeviceTokensTable = `
+CREATE TABLE IF NOT EXISTS device_tokens (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token      VARCHAR(512) UNIQUE NOT NULL,
+    platform   VARCHAR(16) NOT NULL CHECK (platform IN ('android','ios')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_user_id ON device_tokens(user_id);
+`
+
+// createWatchProgressSupport añade la columna updated_at a views y crea el índice único parcial
+// necesario para el UPSERT de progreso de visualización (UpdateWatchProgress).
+const createWatchProgressSupport = `
+ALTER TABLE views ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_views_user_episode
+    ON views (user_id, episode_id)
+    WHERE user_id IS NOT NULL;
+`
+
+// ─── Multi-tenant ──────────────────────────────────────────────────────────────
+
+// createProducersTable crea la tabla de productores de contenido.
+// Cada productor está vinculado a un usuario con rol 'producer' o 'super_admin'.
+const createProducersTable = `
+CREATE TABLE IF NOT EXISTS producers (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        VARCHAR(255) NOT NULL,
+    slug        VARCHAR(100) UNIQUE NOT NULL,
+    logo_url    VARCHAR(500),
+    description TEXT,
+    is_active   BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_producers_user_id ON producers(user_id);
+CREATE INDEX IF NOT EXISTS idx_producers_slug ON producers(slug);
+`
+
+// alterSeriesAddProducerID añade la FK producer_id a la tabla series.
+// Nullable: las series sin producer_id son "contenido de plataforma" visible para super_admin.
+const alterSeriesAddProducerID = `
+ALTER TABLE series ADD COLUMN IF NOT EXISTS producer_id UUID REFERENCES producers(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_series_producer_id ON series(producer_id);
+`
+
+// alterUserRolesAddProducerRoles amplía el CHECK constraint de user_roles para soportar
+// los nuevos roles 'producer' y 'super_admin'.
+// Primero elimina el constraint viejo (si existe) y luego lo recrea ampliado.
+const alterUserRolesAddProducerRoles = `
+ALTER TABLE user_roles DROP CONSTRAINT IF EXISTS user_roles_role_check;
+ALTER TABLE user_roles ADD CONSTRAINT user_roles_role_check
+    CHECK (role IN ('admin', 'moderator', 'user', 'producer', 'super_admin'));
+`
+
+// alterProducersAddStatus agrega el campo status para el flujo de aprobación de tenants.
+// pending = esperando aprobación del super_admin
+// active   = productor activo con acceso completo
+// suspended = acceso suspendido temporalmente
+const alterProducersAddStatus = `
+ALTER TABLE producers ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending'
+    CHECK (status IN ('pending', 'active', 'suspended'));
+`
+
+// createInvitationsTable almacena links de invitación para añadir colaboradores a un tenant.
+// El tenant admin genera un token único con rol y expiración, lo comparte vía link.
+const createInvitationsTable = `
+CREATE TABLE IF NOT EXISTS invitations (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    token        VARCHAR(64) UNIQUE NOT NULL,
+    producer_id  UUID NOT NULL REFERENCES producers(id) ON DELETE CASCADE,
+    role         VARCHAR(50) NOT NULL DEFAULT 'producer',
+    created_by   UUID REFERENCES users(id),
+    expires_at   TIMESTAMP NOT NULL,
+    used_at      TIMESTAMP,
+    used_by      UUID REFERENCES users(id),
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_invitations_token       ON invitations(token);
+CREATE INDEX IF NOT EXISTS idx_invitations_producer_id ON invitations(producer_id);
+`
+
+// createProducerMembersTable permite que múltiples usuarios pertenezcan al mismo tenant.
+// El dueño sigue siendo el user_id en la tabla producers;
+// los colaboradores invitados se almacenan aquí.
+const createProducerMembersTable = `
+CREATE TABLE IF NOT EXISTS producer_members (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    producer_id UUID NOT NULL REFERENCES producers(id) ON DELETE CASCADE,
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role        VARCHAR(50) NOT NULL DEFAULT 'producer',
+    joined_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (producer_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_producer_members_user_id     ON producer_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_producer_members_producer_id ON producer_members(producer_id);
 `
 
