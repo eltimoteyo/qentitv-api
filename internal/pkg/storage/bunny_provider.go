@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -93,8 +92,9 @@ func (p *BunnyProvider) UploadVideo(externalID string, data io.Reader, contentTy
 	return nil
 }
 
-// GetPlaybackURL genera la URL de reproducción con token de seguridad Bunny CDN (Advanced SHA256).
-// Usa path-style URL con directory token para que los segmentos HLS también sean accesibles.
+// GetPlaybackURL genera la URL de reproducción para Bunny Stream CDN.
+// Si SecurityKey está configurado, genera token firmado (Advanced SHA256, query-style).
+// Si está vacío, devuelve URL directa (cuando tokenAuthEnabled=false en la biblioteca Bunny).
 func (p *BunnyProvider) GetPlaybackURL(externalID string, expirationMinutes int) (string, error) {
 	if externalID == "" {
 		return "", fmt.Errorf("bunny: empty video ID")
@@ -103,35 +103,23 @@ func (p *BunnyProvider) GetPlaybackURL(externalID string, expirationMinutes int)
 		return "", fmt.Errorf("bunny: BUNNY_CDN_HOSTNAME not configured")
 	}
 
-	expiry := time.Now().Add(time.Duration(expirationMinutes) * time.Minute).Unix()
-	expiryStr := strconv.FormatInt(expiry, 10)
-
-	// URL sin token (para retornar cuando no hay SecurityKey configurado)
 	baseURL := fmt.Sprintf("https://%s/%s/playlist.m3u8", p.cfg.CDNHostname, externalID)
 
 	if p.cfg.SecurityKey == "" {
+		// tokenAuthEnabled=false en Bunny → devolver URL directa sin token
 		return baseURL, nil
 	}
 
-	// Bunny Advanced Token Authentication (SHA256):
-	// token = Base64Url_NoPadding(SHA256(securityKey + signedPath + expiry + userIP + sortedParams))
-	// Para HLS: usar directory path como signedPath y token_path para que los segmentos hereden el token.
-	dirPath := fmt.Sprintf("/%s/", externalID) // directorio del video
-	sortedParams := "token_path=" + dirPath    // parámetro adicional (sin URL-encode en el hash)
+	// tokenAuthEnabled=true → generar token SHA256 (Bunny Advanced Token Auth)
+	// Formula: token = Base64Url_NoPadding(SHA256(securityKey + path + expiry))
+	expiry := time.Now().Add(time.Duration(expirationMinutes) * time.Minute).Unix()
+	expiryStr := strconv.FormatInt(expiry, 10)
+	path := fmt.Sprintf("/%s/playlist.m3u8", externalID)
 
-	hashInput := p.cfg.SecurityKey + dirPath + expiryStr + "" + sortedParams
-	h := sha256.Sum256([]byte(hashInput))
-
-	// Base64 URL-safe SIN padding (strtr de PHP: '+' -> '-', '/' -> '_', sin '=')
+	h := sha256.Sum256([]byte(p.cfg.SecurityKey + path + expiryStr))
 	token := base64.RawURLEncoding.EncodeToString(h[:])
 
-	// Path-style URL (embeds token en el path para que ExoPlayer lo herede en segment requests)
-	// Formato: https://{cdn}/bcdn_token={token}&expires={expiry}&token_path=%2F{id}%2F/{id}/playlist.m3u8
-	encodedPath := url.QueryEscape(dirPath)
-	signedURL := fmt.Sprintf("https://%s/bcdn_token=%s&expires=%s&token_path=%s/%s/playlist.m3u8",
-		p.cfg.CDNHostname, token, expiryStr, encodedPath, externalID)
-
-	return signedURL, nil
+	return fmt.Sprintf("%s?token=%s&expires=%s", baseURL, token, expiryStr), nil
 }
 
 // DeleteVideo elimina el video de la biblioteca de Bunny Stream.
