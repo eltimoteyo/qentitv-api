@@ -66,6 +66,29 @@ func RequireAuth(jwtService *jwt.Service) gin.HandlerFunc {
 	}
 }
 
+// OptionalAuth extrae el JWT si está presente pero no requiere autenticación.
+// Si hay token válido, popula user_id/role/email en el contexto igual que RequireAuth.
+// Si no hay token (o es inválido), continúa la request sin datos de usuario.
+func OptionalAuth(jwtService *jwt.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader != "" {
+			parts := strings.Split(authHeader, " ")
+			if len(parts) == 2 && parts[0] == "Bearer" {
+				if claims, err := jwtService.ValidateToken(parts[1]); err == nil {
+					if userID, err := claims.GetUserID(); err == nil {
+						c.Set("claims", claims)
+						c.Set("user_id", userID)
+						c.Set("role", claims.Role)
+						c.Set("email", claims.Email)
+					}
+				}
+			}
+		}
+		c.Next()
+	}
+}
+
 // RequireAdmin verifica que el usuario tenga acceso al panel:
 // acepta roles "admin", "super_admin" y "producer".
 // Establece producer_id en el contexto cuando el rol es "producer".

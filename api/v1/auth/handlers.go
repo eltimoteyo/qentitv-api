@@ -440,3 +440,54 @@ func (h *Handlers) GetInviteInfo(c *gin.Context) {
 func parseProducerUUID(s string) (uuid.UUID, error) {
 	return uuid.Parse(s)
 }
+
+// DevLoginRequest representa el payload de login de desarrollo
+type DevLoginRequest struct {
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
+// DevLogin crea/obtiene un usuario de prueba sin requerir Firebase.
+// Solo disponible si DEV_LOGIN_ENABLED=true en el servidor.
+func (h *Handlers) DevLogin(c *gin.Context) {
+	var req DevLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Email == "" {
+		req.Email = "dev-test@qentitv.app"
+	}
+
+	ctx := c.Request.Context()
+
+	// Usar un UID estable basado en el email para que el mismo email siempre sea el mismo usuario
+	firebaseUID := "dev-" + req.Email
+
+	dbUser, err := h.authService.GetOrCreateUser(ctx, firebaseUID, req.Email)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create dev user"})
+		return
+	}
+
+	role, producerID, _ := h.authService.GetUserRole(firebaseUID)
+
+	accessToken, _, err := h.jwtService.GenerateToken(
+		dbUser.ID, dbUser.Email, role, producerID, 24,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+		return
+	}
+
+	expiresAt := time.Now().Add(24 * time.Hour)
+
+	c.JSON(http.StatusOK, LoginResponse{
+		AccessToken: accessToken,
+		ExpiresAt:   expiresAt,
+		User: UserInfo{
+			ID:          dbUser.ID.String(),
+			Email:       dbUser.Email,
+			IsPremium:   dbUser.IsPremium,
+			CoinBalance: dbUser.CoinBalance,
+			Role:        role,
+		},
+	})
+}
+

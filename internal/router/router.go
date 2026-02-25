@@ -3,6 +3,7 @@ package router
 import (
 	"database/sql"
 	"log"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/qenti/qenti/api/v1/admin"
@@ -128,6 +129,11 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 		// Invitaciones: info pública (no requiere auth) + aceptar (requiere auth)
 		v1Auth.GET("/invite/:token", authHandlers.GetInviteInfo)
 		v1Auth.POST("/invite/accept", middleware.RequireAuth(jwtService), authHandlers.AcceptInvite)
+		// Dev login: solo disponible si Firebase NO está configurado (FIREBASE_PROJECT_ID vacío)
+		if os.Getenv("FIREBASE_PROJECT_ID") == "" {
+			v1Auth.POST("/dev-login", authHandlers.DevLogin)
+			log.Println("⚠️  /auth/dev-login habilitado (Firebase no configurado)")
+		}
 	}
 	
 	// API v1 - App endpoints
@@ -142,13 +148,14 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 		v1App.GET("/search", appHandlers.Search)
 		v1App.GET("/most-viewed", appHandlers.GetMostViewed)
 		v1App.GET("/new-releases", appHandlers.GetNewReleases)
-		
+		// Stream: auth opcional — episodios gratis accesibles sin login, pagos requieren auth
+		v1App.GET("/episodes/:id/stream", middleware.OptionalAuth(jwtService), appHandlers.GetEpisodeStream)
+
 		// Endpoints autenticados
 		v1AppAuth := v1App.Group("")
 		v1AppAuth.Use(middleware.RequireAuth(jwtService))
 		{
-			// Episodios
-			v1AppAuth.GET("/episodes/:id/stream", appHandlers.GetEpisodeStream)
+			// Episodios (acciones que sí requieren identidad)
 			v1AppAuth.POST("/episodes/:id/unlock", middleware.RateLimitMiddleware(2.0, 5), appHandlers.UnlockEpisode)
 			v1AppAuth.POST("/episodes/:id/progress", appHandlers.UpdateWatchProgress)
 
