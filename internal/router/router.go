@@ -35,7 +35,7 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 			// En producción esto debería ser fatal
 		}
 	}
-	
+
 	// Inicializar servicios
 	authService := auth.NewService(db, firebaseService)
 	jwtService := jwt.NewService(cfg.JWT.SecretKey)
@@ -51,7 +51,7 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 		log.Fatalf("storage provider: %v", err)
 	}
 	log.Printf("CDN provider: %s", videoProvider.ProviderName())
-	
+
 	// Inicializar repositorios
 	seriesRepo := series.NewRepository(db)
 	episodesRepo := episodes.NewRepository(db)
@@ -59,10 +59,10 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 	unlocksRepo := unlocks.NewRepository(db)
 	producersRepo := producers.NewRepository(db)
 	invitationsRepo := invitations.NewRepository(db)
-	
+
 	// Inicializar handlers de Auth
 	authHandlers := authHandlers.NewHandlers(authService, jwtService, db, usersRepo, producersRepo, invitationsRepo, cfg.SuperAdminEmail)
-	
+
 	// Inicializar handlers de App
 	appHandlers := appHandlers.NewHandlers(
 		seriesRepo,
@@ -88,10 +88,10 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 		cfg.EpisodeCliff.BasePrice,
 		cfg.EpisodeCliff.CliffPrice,
 	)
-	
+
 	// Inicializar handlers de Admin Users
 	adminUsersHandlers := admin.NewUsersHandlers(usersRepo, db)
-	
+
 	// Inicializar handlers de Admin Dashboard
 	adminDashboardHandlers := admin.NewDashboardHandlers(db)
 
@@ -103,21 +103,21 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 	adminInvitationsHandlers := admin.NewInvitationsHandlers(invitationsRepo)
 	// Inicializar handlers de Team (gestión de equipo del tenant)
 	adminTeamHandlers := admin.NewTeamHandlers(db)
-	
+
 	// Inicializar handlers de Webhook
 	webhookHandlers := admin.NewWebhookHandlers(
 		paymentService,
 		usersRepo,
 	)
-	
+
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
-			"status": "ok",
+			"status":  "ok",
 			"service": "qenti-api",
 		})
 	})
-	
+
 	// API v1 - Auth (unificado) con rate limiting
 	v1Auth := r.Group("/api/v1/auth")
 	v1Auth.Use(middleware.RateLimitMiddleware(5.0, 10)) // 5 requests por segundo, burst de 10
@@ -135,7 +135,7 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 			log.Println("⚠️  /auth/dev-login habilitado (Firebase no configurado)")
 		}
 	}
-	
+
 	// API v1 - App endpoints
 	v1App := r.Group("/api/v1/app")
 	{
@@ -162,11 +162,14 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 			// Anuncios con rate limiting más estricto
 			v1AppAuth.POST("/ads/unlock-episode", middleware.RateLimitMiddleware(1.0, 3), appHandlers.UnlockEpisodeWithAd)
 			v1AppAuth.POST("/ads/reward-coins", middleware.RateLimitMiddleware(1.0, 3), appHandlers.RewardCoinsForAd)
-			
+
+			// Check-in diario
+			v1AppAuth.POST("/checkin", middleware.RateLimitMiddleware(1.0, 2), appHandlers.DailyCheckIn)
+
 			// Wallet
 			v1AppAuth.GET("/wallet", appHandlers.GetWallet)
 			v1AppAuth.GET("/wallet/history", appHandlers.GetWalletHistory)
-			
+
 			// Payment
 			v1AppAuth.GET("/payment/subscription-status", appHandlers.GetSubscriptionStatus)
 			v1AppAuth.GET("/payment/offer", appHandlers.GetOffer)
@@ -186,7 +189,7 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 			v1AppAuth.POST("/favorites/:series_id", appHandlers.ToggleFavorite)
 		}
 	}
-	
+
 	// API v1 - Admin endpoints (requieren rol admin)
 	v1Admin := r.Group("/api/v1/admin")
 	v1Admin.Use(middleware.RequireAdmin(jwtService, authService, usersRepo))
@@ -198,29 +201,29 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 		v1Admin.GET("/producer-status", adminDashboardHandlers.GetProducerStatus)
 		v1Admin.GET("/my-producer", adminMyProducerHandlers.GetMyProducer)
 		v1Admin.PUT("/my-producer", adminMyProducerHandlers.UpdateMyProducer)
-		
+
 		// Series CRUD
 		v1Admin.GET("/series", adminHandlers.GetSeries)
 		v1Admin.GET("/series/:id", adminHandlers.GetSeriesByID)
 		v1Admin.POST("/series", adminHandlers.CreateSeries)
 		v1Admin.PUT("/series/:id", adminHandlers.UpdateSeries)
 		v1Admin.DELETE("/series/:id", adminHandlers.DeleteSeries)
-		
+
 		// Episodes CRUD
 		v1Admin.GET("/episodes", adminHandlers.GetEpisodes)
 		v1Admin.GET("/episodes/:id", adminHandlers.GetEpisodeByID)
 		v1Admin.POST("/episodes", adminHandlers.CreateEpisode)
 		v1Admin.PUT("/episodes/:id", adminHandlers.UpdateEpisode)
 		v1Admin.DELETE("/episodes/:id", adminHandlers.DeleteEpisode)
-		
+
 		// Video upload flow (específico por episodio)
 		v1Admin.POST("/episodes/:id/upload-url", adminHandlers.GetUploadURL)
 		v1Admin.POST("/episodes/:id/upload", adminHandlers.UploadVideo)
 		v1Admin.POST("/episodes/:id/complete", adminHandlers.CompleteUpload)
-		
+
 		// Validación de servicios
 		v1Admin.GET("/validate/bunny", adminHandlers.ValidateBunnyConnection)
-		
+
 		// Users management
 		v1Admin.GET("/users", adminUsersHandlers.GetUsers)
 		v1Admin.GET("/users/:id", adminUsersHandlers.GetUserByID)
@@ -249,11 +252,10 @@ func SetupRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) {
 		v1SuperAdmin.PUT("/:id/approve", adminProducersHandlers.ApproveProducer)
 		v1SuperAdmin.PUT("/:id/suspend", adminProducersHandlers.SuspendProducer)
 	}
-	
+
 	// Webhooks (sin autenticación estándar, usan firma propia)
 	webhooks := r.Group("/api/v1/webhooks")
 	{
 		webhooks.POST("/revenuecat", webhookHandlers.HandleRevenueCatWebhook)
 	}
 }
-
